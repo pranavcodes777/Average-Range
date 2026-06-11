@@ -38,13 +38,13 @@ html, body, .stApp {{ background:{BG}; font-family:'Inter',sans-serif; }}
 
 /* ── Ice-blue glass KPI cards ─────────────────────────────────────────── */
 div[data-testid="metric-container"] {{
-  background: linear-gradient(135deg, rgba(100,180,255,0.07) 0%, rgba(80,140,255,0.03) 100%);
-  border: 1px solid rgba(120,210,255,0.38);
-  border-top: 1px solid rgba(160,230,255,0.55);
-  border-radius: 14px;
-  padding: 0.8rem 1.1rem;
-  box-shadow: 0 0 18px rgba(100,180,255,0.10), 0 1px 0 rgba(160,230,255,0.12) inset;
-  backdrop-filter: blur(12px);
+  background: linear-gradient(135deg, rgba(100,180,255,0.08) 0%, rgba(80,140,255,0.03) 100%) !important;
+  border: 1px solid rgba(120,210,255,0.45) !important;
+  border-top: 1px solid rgba(160,230,255,0.65) !important;
+  border-radius: 14px !important;
+  padding: 0.8rem 1.1rem !important;
+  box-shadow: 0 0 20px rgba(100,180,255,0.12), inset 0 1px 0 rgba(160,230,255,0.15) !important;
+  backdrop-filter: blur(12px) !important;
 }}
 div[data-testid="metric-container"] label {{
   font-size: 0.65rem !important;
