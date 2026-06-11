@@ -125,6 +125,19 @@ div[data-baseweb="select"] svg {{ color:{MUTED} !important; }}
 /* ── Toggle ──────────────────────────────────────────────────────────── */
 .stToggle span {{ color:{MUTED} !important; font-size:.8rem !important; }}
 
+/* ── Year range slider ───────────────────────────────────────────────── */
+div[data-testid="stSlider"] {{
+  padding: 0 0.2rem;
+}}
+div[data-testid="stSlider"] label {{
+  font-size: .68rem !important; color: {ICE_TEXT} !important;
+  text-transform: uppercase; letter-spacing: .06em; font-weight: 600; opacity: .7;
+}}
+div[data-testid="stSlider"] [data-testid="stTickBarMin"],
+div[data-testid="stSlider"] [data-testid="stTickBarMax"] {{
+  color: {MUTED} !important; font-size: .7rem !important;
+}}
+
 hr {{ border-color:{BORDER} !important; margin:.6rem 0 1rem; }}
 h1,h2,h3,h4 {{ color:{TEXT} !important; }}
 </style>
@@ -150,10 +163,48 @@ def load_summary():
     return pd.read_parquet(DB_DIR / "avg_range_summary.parquet")
 
 @st.cache_data(show_spinner=False)
-def load_stock_daily(symbol: str):
+def load_all_daily() -> pd.DataFrame:
     df = pd.read_parquet(DB_DIR / "daily_ranges.parquet")
     df["date"] = pd.to_datetime(df["date"])
-    return df[df["symbol"] == symbol].set_index("date").sort_index()
+    return df
+
+def load_stock_daily(symbol: str, yr_start: int, yr_end: int) -> pd.DataFrame:
+    df = load_all_daily()
+    mask = (
+        (df["symbol"] == symbol) &
+        (df["date"].dt.year >= yr_start) &
+        (df["date"].dt.year <= yr_end)
+    )
+    return df[mask].set_index("date").sort_index()
+
+# Trading-day counts per timeframe (for sqrt-of-time scaling from daily avg)
+_TF_DAYS = {
+    "daily_range_pct":      1,
+    "weekly_range_pct":     5,
+    "monthly_range_pct":    21,
+    "quarterly_range_pct":  63,
+    "halfyearly_range_pct": 126,
+    "yearly_range_pct":     252,
+    "fiveyearly_range_pct": 1260,
+}
+
+@st.cache_data(show_spinner=False)
+def compute_active_summary(yr_start: int, yr_end: int) -> pd.DataFrame:
+    """Recompute per-stock avg ranges for the chosen year window."""
+    all_d = load_all_daily()
+    df = all_d[(all_d["date"].dt.year >= yr_start) & (all_d["date"].dt.year <= yr_end)]
+    grp = df.groupby("symbol").agg(
+        daily_range_pct=("range_pct", "mean"),
+        daily_range_abs=("range_abs", "mean"),
+    )
+    for col, days in _TF_DAYS.items():
+        if col != "daily_range_pct":
+            grp[col] = (grp["daily_range_pct"] * np.sqrt(days)).round(4)
+            abs_col  = col.replace("_pct", "_abs")
+            grp[abs_col] = (grp["daily_range_abs"] * np.sqrt(days)).round(2)
+    grp["daily_range_pct"] = grp["daily_range_pct"].round(4)
+    grp["daily_range_abs"] = grp["daily_range_abs"].round(2)
+    return grp.reset_index()
 
 def kpi(col, label: str, value: str, sub: str = ""):
     """Render a fully custom HTML metric card — bypasses st.metric CSS isolation."""
@@ -307,12 +358,28 @@ with c_tf:
 with c_sector:
     sector_filter = st.selectbox("", all_sectors, label_visibility="collapsed")
 
+# ── YEAR RANGE SLIDER ─────────────────────────────────────────────────────────
+sl_left, sl_mid, sl_right = st.columns([0.5, 9, 0.5])
+with sl_mid:
+    yr_range = st.slider(
+        "Period",
+        min_value=2015, max_value=2026,
+        value=(2015, 2026),
+        step=1,
+        format="%d",
+    )
+
 st.markdown(f"<hr>", unsafe_allow_html=True)
 
 pct_col, abs_col = TIMEFRAMES[tf_label]
 
+# ── BUILD ACTIVE SUMMARY (year-filtered ranges + metadata) ────────────────────
+dyn = compute_active_summary(yr_range[0], yr_range[1])
+META_COLS = ["symbol", "company_name", "industry", "last_close", "data_start", "data_end"]
+active_summary = summary[META_COLS].merge(dyn, on="symbol", how="left")
+
 # ── FILTER FOR OVERVIEW ───────────────────────────────────────────────────────
-filtered = summary.copy()
+filtered = active_summary.copy()
 if sector_filter != "All":
     filtered = filtered[filtered["industry"] == sector_filter]
 
@@ -321,7 +388,7 @@ if sector_filter != "All":
 # ═══════════════════════════════════════════════════════════════════════════════
 if search_val:
     symbol = search_val.split("  ·  ")[0].strip()
-    row    = summary[summary["symbol"] == symbol]
+    row    = active_summary[active_summary["symbol"] == symbol]
     if len(row) == 0:
         st.warning("Stock not found.")
         st.stop()
@@ -340,6 +407,10 @@ if search_val:
         </span>
         <span>Last Close &nbsp;<strong style="color:{TEXT};">₹{stock['last_close']:,.2f}</strong></span>
         <span>Data &nbsp;<strong style="color:{TEXT};">{stock['data_start']} → {stock['data_end']}</strong></span>
+        <span style="background:rgba(91,106,240,0.15);color:#a5b4fc;border:1px solid rgba(91,106,240,0.3);
+              border-radius:5px;padding:.15rem .6rem;font-size:.7rem;">
+          Period: {yr_range[0]} – {yr_range[1]}
+        </span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -367,7 +438,7 @@ if search_val:
     with right:
         st.markdown(f"<div class='card' style='padding:.6rem;'>", unsafe_allow_html=True)
         try:
-            daily_df = load_stock_daily(symbol)
+            daily_df = load_stock_daily(symbol, yr_range[0], yr_range[1])
             if len(daily_df) > 5:
                 st.plotly_chart(rolling_chart(daily_df, symbol),
                                 use_container_width=True,
