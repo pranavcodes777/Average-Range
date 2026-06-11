@@ -36,35 +36,7 @@ st.markdown(f"""
 html, body, .stApp {{ background:{BG}; font-family:'Inter',sans-serif; }}
 .block-container {{ padding:1.5rem 2.5rem 1rem; max-width:1320px; }}
 
-/* ── Ice-blue glass KPI cards ─────────────────────────────────────────── */
-div[data-testid="metric-container"] {{
-  background: linear-gradient(135deg, rgba(100,180,255,0.08) 0%, rgba(80,140,255,0.03) 100%) !important;
-  border: 1px solid rgba(120,210,255,0.45) !important;
-  border-top: 1px solid rgba(160,230,255,0.65) !important;
-  border-radius: 14px !important;
-  padding: 0.8rem 1.1rem !important;
-  box-shadow: 0 0 20px rgba(100,180,255,0.12), inset 0 1px 0 rgba(160,230,255,0.15) !important;
-  backdrop-filter: blur(12px) !important;
-}}
-div[data-testid="metric-container"] label {{
-  font-size: 0.65rem !important;
-  color: {ICE_TEXT} !important;
-  text-transform: uppercase;
-  letter-spacing: .07em;
-  font-weight: 600;
-  opacity: 0.7;
-}}
-div[data-testid="metric-container"] [data-testid="stMetricValue"] {{
-  font-size: 1.15rem !important;
-  color: {TEXT} !important;
-  font-weight: 700;
-  line-height: 1.3;
-}}
-div[data-testid="stMetricDelta"] {{
-  font-size: 0.7rem !important;
-  color: {ICE_TEXT} !important;
-  opacity: 0.65;
-}}
+/* metric cards are pure HTML via kpi() helper — no st.metric CSS needed */
 
 /* ── Timeframe radio — single line, ice-blue pills ──────────────────────── */
 div[role="radiogroup"] {{
@@ -182,6 +154,31 @@ def load_stock_daily(symbol: str):
     df = pd.read_parquet(DB_DIR / "daily_ranges.parquet")
     df["date"] = pd.to_datetime(df["date"])
     return df[df["symbol"] == symbol].set_index("date").sort_index()
+
+def kpi(col, label: str, value: str, sub: str = ""):
+    """Render a fully custom HTML metric card — bypasses st.metric CSS isolation."""
+    sub_html = (
+        f'<div style="font-size:.68rem;color:#7abaff;opacity:.65;margin-top:.25rem;">{sub}</div>'
+        if sub else ""
+    )
+    col.markdown(f"""
+    <div style="
+      background:linear-gradient(135deg,rgba(100,180,255,0.09) 0%,rgba(80,140,255,0.03) 100%);
+      border:1px solid rgba(130,215,255,0.42);
+      border-top:1px solid rgba(170,235,255,0.62);
+      border-radius:14px;
+      padding:.8rem 1.1rem;
+      box-shadow:0 0 20px rgba(100,180,255,0.13),inset 0 1px 0 rgba(170,235,255,0.14);
+      min-height:78px;
+    ">
+      <div style="font-size:.62rem;color:#7abaff;text-transform:uppercase;
+                  letter-spacing:.07em;font-weight:600;opacity:.75;">{label}</div>
+      <div style="font-size:1.2rem;color:#f0f2f8;font-weight:700;
+                  line-height:1.35;margin-top:.18rem;">{value}</div>
+      {sub_html}
+    </div>
+    """, unsafe_allow_html=True)
+
 
 def chart_base(height=290, t=40, b=20, l=8, r=20):
     return dict(
@@ -347,17 +344,14 @@ if search_val:
     </div>
     """, unsafe_allow_html=True)
 
-    # 7 metric cards
+    # 7 metric cards — custom HTML (st.metric CSS not reachable on Cloud)
     mcols = st.columns(7)
     for col, (tf_name, (p_col, a_col)) in zip(mcols, TIMEFRAMES.items()):
         val     = stock.get(p_col)
         abs_val = stock.get(a_col)
-        col.metric(
-            tf_name,
+        kpi(col, tf_name,
             f"{val:.2f}%" if pd.notna(val) else "—",
-            delta=f"₹{abs_val:.2f}" if pd.notna(abs_val) else None,
-            delta_color="off",
-        )
+            f"₹{abs_val:.2f}" if pd.notna(abs_val) else "")
 
     st.markdown("")
 
@@ -394,14 +388,14 @@ else:
     valid = filtered[pct_col].dropna()
 
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Equities", f"{len(filtered)}")
-    k2.metric("Avg Range", f"{valid.mean():.2f}%" if len(valid) else "—")
-    k3.metric("Median",    f"{valid.median():.2f}%" if len(valid) else "—")
+    kpi(k1, "Equities", f"{len(filtered)}")
+    kpi(k2, "Avg Range", f"{valid.mean():.2f}%" if len(valid) else "—")
+    kpi(k3, "Median",    f"{valid.median():.2f}%" if len(valid) else "—")
     if len(valid):
         hi_sym = filtered.loc[valid.idxmax(), "symbol"]
         lo_sym = filtered.loc[valid.idxmin(), "symbol"]
-        k4.metric("Highest", f"{valid.max():.2f}%", delta=hi_sym, delta_color="off")
-        k5.metric("Lowest",  f"{valid.min():.2f}%",  delta=lo_sym,  delta_color="off")
+        kpi(k4, "Highest", f"{valid.max():.2f}%", hi_sym)
+        kpi(k5, "Lowest",  f"{valid.min():.2f}%", lo_sym)
 
     st.markdown("")
 
