@@ -600,7 +600,7 @@ else:
             st.dataframe(
                 display.style
                     .format({"Close (₹)": "{:,.2f}", f"Avg Range % · {tf_label}": "{:.2f}%", z_name: "{:+.2f}"})
-                    .applymap(_style_z, subset=[z_name])
+                    .map(_style_z, subset=[z_name])
                     .background_gradient(subset=[f"Avg Range % · {tf_label}"], cmap="Blues"),
                 use_container_width=True, height=510,
             )
@@ -642,6 +642,6 @@ else:
                 .format({"Avg %": "{:.2f}%", "Median %": "{:.2f}%",
                          "Max %": "{:.2f}%", "Min %": "{:.2f}%", "Universe Z": "{:+.2f}"})
                 .background_gradient(subset=["Avg %"], cmap="Blues")
-                .applymap(_style_sector_z, subset=["Universe Z"]),
+                .map(_style_sector_z, subset=["Universe Z"]),
             use_container_width=True,
         )
