@@ -206,6 +206,49 @@ def compute_active_summary(yr_start: int, yr_end: int) -> pd.DataFrame:
     grp["daily_range_abs"] = grp["daily_range_abs"].round(2)
     return grp.reset_index()
 
+
+def add_zscores(df: pd.DataFrame, pct_col: str) -> pd.DataFrame:
+    """Add universe_z, sector_z, universe_rank to df. Runs on ~501 rows, no caching needed."""
+    out = df[["symbol", "industry", pct_col]].copy().dropna(subset=[pct_col])
+
+    # Universe Z-score
+    u_mean, u_std = out[pct_col].mean(), out[pct_col].std()
+    out["universe_z"] = ((out[pct_col] - u_mean) / u_std).round(2)
+
+    # Sector Z-score (within-industry)
+    def _sector_z(g):
+        m, s = g[pct_col].mean(), g[pct_col].std()
+        g = g.copy()
+        g["sector_z"] = 0.0 if (pd.isna(s) or s == 0) else ((g[pct_col] - m) / s).round(2)
+        return g
+    out = out.groupby("industry", group_keys=False).apply(_sector_z)
+
+    # Universe rank: 1 = highest range
+    out["universe_rank"] = out[pct_col].rank(ascending=False, method="min").astype(int)
+    out["universe_total"] = len(out)
+
+    return out[["symbol", "universe_z", "sector_z", "universe_rank", "universe_total"]]
+
+
+def z_color(val: float) -> str:
+    """Return an inline color style for a Z-score value."""
+    if pd.isna(val):   return MUTED
+    if val >= 2.0:     return "#ff5e5e"
+    if val >= 1.0:     return "#ff9f43"
+    if val >= 0:       return "#ffd166"
+    if val >= -1.0:    return "#5bb8ff"
+    return "#4ecdc4"
+
+
+def z_label(val: float) -> str:
+    if pd.isna(val):   return "—"
+    if val >= 2.0:     return "Extremely high"
+    if val >= 1.0:     return "Above average"
+    if val >= -1.0:    return "Average"
+    if val >= -2.0:    return "Below average"
+    return "Very low"
+
+
 def kpi(col, label: str, value: str, sub: str = ""):
     """Render a fully custom HTML metric card — bypasses st.metric CSS isolation."""
     sub_html = (
@@ -378,6 +421,10 @@ dyn = compute_active_summary(yr_range[0], yr_range[1])
 META_COLS = ["symbol", "company_name", "industry", "last_close", "data_start", "data_end"]
 active_summary = summary[META_COLS].merge(dyn, on="symbol", how="left")
 
+# Z-scores computed against the full active_summary universe (all 501 stocks)
+z_df = add_zscores(active_summary, pct_col)
+active_summary = active_summary.merge(z_df, on="symbol", how="left")
+
 # ── FILTER FOR OVERVIEW ───────────────────────────────────────────────────────
 filtered = active_summary.copy()
 if sector_filter != "All":
@@ -423,6 +470,39 @@ if search_val:
         kpi(col, tf_name,
             f"{val:.2f}%" if pd.notna(val) else "—",
             f"₹{abs_val:.2f}" if pd.notna(abs_val) else "")
+
+    # Z-score comparison row
+    uz  = stock.get("universe_z")
+    sz  = stock.get("sector_z")
+    urk = stock.get("universe_rank")
+    utt = stock.get("universe_total")
+    if pd.notna(uz):
+        u_pct    = round(float(urk) / float(utt) * 100, 1)
+        u_top    = f"Top {u_pct}%" if u_pct <= 50 else f"Bottom {round(100-u_pct,1)}%"
+        uc       = z_color(uz)
+        sc       = z_color(sz)
+        st.markdown(f"""
+        <div style="display:flex;gap:.7rem;margin:.6rem 0 .9rem;flex-wrap:wrap;">
+          <div style="background:rgba(100,180,255,0.05);border:1px solid rgba(130,215,255,0.25);
+                border-radius:10px;padding:.55rem 1rem;flex:1;min-width:140px;">
+            <div style="font-size:.6rem;color:{MUTED};text-transform:uppercase;letter-spacing:.06em;font-weight:600;">Universe Z-score</div>
+            <div style="font-size:1.1rem;font-weight:700;color:{uc};margin-top:.15rem;">{uz:+.2f}</div>
+            <div style="font-size:.68rem;color:{MUTED};margin-top:.1rem;">{z_label(uz)} · {u_top} in NSE500</div>
+          </div>
+          <div style="background:rgba(100,180,255,0.05);border:1px solid rgba(130,215,255,0.25);
+                border-radius:10px;padding:.55rem 1rem;flex:1;min-width:140px;">
+            <div style="font-size:.6rem;color:{MUTED};text-transform:uppercase;letter-spacing:.06em;font-weight:600;">Sector Z-score</div>
+            <div style="font-size:1.1rem;font-weight:700;color:{sc};margin-top:.15rem;">{sz:+.2f}</div>
+            <div style="font-size:.68rem;color:{MUTED};margin-top:.1rem;">{z_label(sz)} · within {stock['industry']}</div>
+          </div>
+          <div style="background:rgba(100,180,255,0.05);border:1px solid rgba(130,215,255,0.25);
+                border-radius:10px;padding:.55rem 1rem;flex:1;min-width:120px;">
+            <div style="font-size:.6rem;color:{MUTED};text-transform:uppercase;letter-spacing:.06em;font-weight:600;">Universe Rank</div>
+            <div style="font-size:1.1rem;font-weight:700;color:{TEXT};margin-top:.15rem;">#{int(urk)} <span style="font-size:.75rem;color:{MUTED};font-weight:400;">/ {int(utt)}</span></div>
+            <div style="font-size:.68rem;color:{MUTED};margin-top:.1rem;">by {tf_label} avg range</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("")
 
@@ -473,38 +553,57 @@ else:
     tab1, tab2 = st.tabs(["  Stock Table  ", "  Sector View  "])
 
     with tab1:
-        _, tcol = st.columns([5, 1])
-        with tcol:
-            show_abs = st.toggle("Show ₹", value=False)
+        vc1, vc2 = st.columns([4, 2])
+        with vc1:
+            view = st.radio(
+                "", ["Range %", "Universe Z", "Sector Z"],
+                horizontal=True, label_visibility="collapsed",
+            )
+        with vc2:
+            show_abs = st.toggle("Show ₹ absolute", value=False)
 
-        dcols = ["symbol", "company_name", "industry", "last_close", pct_col]
-        crename = {
+        base_cols   = ["symbol", "company_name", "industry", "last_close"]
+        base_rename = {
             "symbol": "Symbol", "company_name": "Company",
             "industry": "Sector", "last_close": "Close (₹)",
-            pct_col: f"Avg Range % · {tf_label}",
         }
-        if show_abs:
-            dcols.append(abs_col)
-            crename[abs_col] = f"Avg Range ₹ · {tf_label}"
 
-        display = (
-            filtered[dcols].rename(columns=crename)
-            .sort_values(f"Avg Range % · {tf_label}", ascending=False)
-            .reset_index(drop=True)
-        )
-        display.index += 1
+        if view == "Range %":
+            dcols   = base_cols + [pct_col] + ([abs_col] if show_abs else [])
+            crename = {**base_rename,
+                       pct_col: f"Avg Range % · {tf_label}",
+                       abs_col: f"Avg Range ₹ · {tf_label}"}
+            sort_col = f"Avg Range % · {tf_label}"
+            display  = filtered[dcols].rename(columns=crename).sort_values(sort_col, ascending=False).reset_index(drop=True)
+            display.index += 1
+            fmt = {"Close (₹)": "{:,.2f}", sort_col: "{:.2f}%"}
+            if show_abs: fmt[f"Avg Range ₹ · {tf_label}"] = "{:.2f}"
+            st.dataframe(
+                display.style.format(fmt).background_gradient(subset=[sort_col], cmap="Blues"),
+                use_container_width=True, height=510,
+            )
 
-        fmt = {"Close (₹)": "{:,.2f}", f"Avg Range % · {tf_label}": "{:.2f}%"}
-        if show_abs:
-            fmt[f"Avg Range ₹ · {tf_label}"] = "{:.2f}"
+        else:
+            z_col    = "universe_z" if view == "Universe Z" else "sector_z"
+            z_name   = f"{'Universe' if view == 'Universe Z' else 'Sector'} Z · {tf_label}"
+            dcols    = base_cols + [pct_col, z_col, "universe_rank"]
+            crename  = {**base_rename,
+                        pct_col:         f"Avg Range % · {tf_label}",
+                        z_col:           z_name,
+                        "universe_rank": "Rank"}
+            display  = filtered[dcols].rename(columns=crename).sort_values(z_name, ascending=False).reset_index(drop=True)
+            display.index += 1
 
-        st.dataframe(
-            display.style
-                .format(fmt)
-                .background_gradient(subset=[f"Avg Range % · {tf_label}"], cmap="Blues"),
-            use_container_width=True,
-            height=510,
-        )
+            def _style_z(val):
+                return f"color:{z_color(val)};font-weight:600;" if pd.notna(val) else ""
+
+            st.dataframe(
+                display.style
+                    .format({"Close (₹)": "{:,.2f}", f"Avg Range % · {tf_label}": "{:.2f}%", z_name: "{:+.2f}"})
+                    .applymap(_style_z, subset=[z_name])
+                    .background_gradient(subset=[f"Avg Range % · {tf_label}"], cmap="Blues"),
+                use_container_width=True, height=510,
+            )
 
     with tab2:
         sector_avg = (
@@ -519,19 +618,30 @@ else:
 
         st.markdown(f"<p style='color:{MUTED};font-size:.76rem;margin-bottom:.4rem;'>Sector breakdown</p>",
                     unsafe_allow_html=True)
+        # Sector universe Z: avg of each sector's stocks' universe Z-scores
+        sector_uz = filtered.groupby("industry")["universe_z"].mean().round(2)
         stbl = (
             filtered.groupby("industry")
             .agg(
-                Stocks=(  "symbol", "count"),
-                **{f"Avg %":    (pct_col, "mean")},
-                **{f"Median %": (pct_col, "median")},
-                **{f"Max %":    (pct_col, "max")},
-                **{f"Min %":    (pct_col, "min")},
+                Stocks   =("symbol",      "count"),
+                **{f"Avg %":     (pct_col, "mean")},
+                **{f"Median %":  (pct_col, "median")},
+                **{f"Max %":     (pct_col, "max")},
+                **{f"Min %":     (pct_col, "min")},
             )
             .round(2)
             .sort_values("Avg %", ascending=False)
         )
+        stbl["Universe Z"] = sector_uz
+
+        def _style_sector_z(val):
+            return f"color:{z_color(val)};font-weight:600;" if pd.notna(val) else ""
+
         st.dataframe(
-            stbl.style.background_gradient(subset=["Avg %"], cmap="Blues"),
+            stbl.style
+                .format({"Avg %": "{:.2f}%", "Median %": "{:.2f}%",
+                         "Max %": "{:.2f}%", "Min %": "{:.2f}%", "Universe Z": "{:+.2f}"})
+                .background_gradient(subset=["Avg %"], cmap="Blues")
+                .applymap(_style_sector_z, subset=["Universe Z"]),
             use_container_width=True,
         )
